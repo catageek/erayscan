@@ -115,7 +115,7 @@ class BaseExecutor:
 			self.registers[register] = int(value, 16)
 		chunk = "".join([i.encode("utf-8") for i in state['memory']])
 		self.memory = MemoryModel(chunk)
-		self.registers["$m"] = self.memory.load_as_int(64)
+		self.registers["sm"] = self.memory.load_as_int(64)
 
 	def __execute_contract(self):
 		func = self.lifter.external_functions[self.signature]
@@ -294,13 +294,13 @@ class BaseExecutor:
 
 	def debug_register(self):
 		print("-" * 32)
-		registers = set(self.registers.keys()) - {"$t", "$m"}
+		registers = set(self.registers.keys()) - {"st", "sm"}
 		registers = sorted(registers, key=lambda x: int(x[2:]))
 		for r in registers:
 			value = ("%x" % self.registers[r])
 			print(r + ":\t" + value)
-		# if "$t" in self.registers:
-		for r in {"$t", "$m"}:
+		# if "st" in self.registers:
+		for r in {"st", "sm"}:
 			if r not in self.registers:
 				continue
 			value = ("%x" % self.registers[r])
@@ -322,7 +322,7 @@ class BaseExecutor:
 			dst_register = func.reads[index]
 			self.registers[dst_register] = inputs[index + 1]
 
-		self.registers["$m"] = saved["$m"]
+		self.registers["sm"] = saved["sm"]
 		self.execute_function(func)
 
 		saved = self.saved_states.pop()
@@ -331,5 +331,5 @@ class BaseExecutor:
 			src_register = instruction.writes[index]
 			dst_register = func.writes[index]
 			saved[src_register] = self.registers[dst_register]
-		saved["$m"] = self.registers["$m"]
+		saved["sm"] = self.registers["sm"]
 		self.registers = saved

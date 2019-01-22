@@ -405,7 +405,8 @@ bin_ops = {
 
 mono_ops = {
 	"NOT"   : "!",
-	"ISZERO": "0 ==",		# ???
+	"ISZERO": "False ==",
+	"NONZERO": "True =="
 }
 
 special_ops = {
@@ -413,7 +414,7 @@ special_ops = {
 	"CALLER": "msg.sender",
 	"TIMESTAMP": "block.timestamp",
 	"CALLVALUE": "msg.value",
-	"ADDRESS": "self",
+	"ADDRESS": "this",
 	"ORIGIN": "tx.origin",
 	"GAS": "msg.gas",
 	"NUMBER": "block.number",

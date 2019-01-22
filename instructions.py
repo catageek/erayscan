@@ -3,8 +3,8 @@ from copy import deepcopy
 INTERNAL_CALL_OPCODE = "INTCALL"
 INTERNAL_RETURN_OPCODE = "INTRETURN"
 
-SWAP_REGISTER = "$t"
-STACK_REGISTER = "$s"
+SWAP_REGISTER = "st"
+STACK_REGISTER = "ss"
 
 
 def to_stack_registers(items):

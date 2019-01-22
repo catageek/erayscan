@@ -227,11 +227,11 @@ def rewrite_free_ptr(block):
 		opcode = instruction.opcode
 		if opcode == "MLOAD" and \
 			instruction.reads[0] == 64:
-			new_instruction = MoveInstruction("MOVE", ["$m"], instruction.writes, instruction.address)
+			new_instruction = MoveInstruction("MOVE", ["sm"], instruction.writes, instruction.address)
 			block.set_instruction(i, new_instruction)
 		elif opcode == "MSTORE" and \
 			instruction.reads[0] == 64:
-			new_instruction = MoveInstruction("MOVE", [instruction.reads[1]], ["$m"], instruction.address)
+			new_instruction = MoveInstruction("MOVE", [instruction.reads[1]], ["sm"], instruction.address)
 			block.set_instruction(i, new_instruction)
 
 
@@ -387,7 +387,7 @@ class Optimizer(Lifter):
 					self.__outs[block_id] = new_out
 					change = True
 		for out in self.__outs.values():
-			out.add("$m")
+			out.add("sm")
 
 	def __compute_use_def(self, block):
 		block_id = block.get_id()
