@@ -2,23 +2,14 @@ from pathfinder import PathFinder
 from expressions import *
 from opcodes import fake_ops, mem_write_ops
 from z3 import *
-
+import z3 as z3lib
 import sys
 
-bool_opcodes = {
-        "LT",
-        "GT",
-        "SLT",
-        "SGT",
-        "EQ",
-        "ISZERO",
-        "NONZERO",
-        "CALL"
-} | fake_ops.viewkeys()
 
-equivalent_opcodes = {
-        "ASSERT":   ("NONZERO", MonoOpExpression)
-}
+
+class Block():
+    def __init__(self):
+        self.timestamp = BitVec('TIMESTAMP', 256)
 
 class Message():
     def __init__(self):
@@ -26,17 +17,11 @@ class Message():
         self.value = BitVec('VALUE', 256)
         self.gas = BitVecVal(3000000, 256)
 
-msg = Message()
-BALANCE = BitVec('BALANCE', 256)
-AD_MASK = BitVecVal(0xffffffffffffffffffffffffffffffffffffffff, 256)
-this = BitVecVal(0xca11ab1e, 256)
-target_value = 0xacce551b1e
 
 class IndirectAddressConstraintBuilder():
-    def __init__(self, expressions):
+    def __init__(self, expressions, _vars):
+        self.vars = _vars
         self.__expressions = expressions
-        self.__mstores = self.get_ops_list(mem_write_ops)
-        self.__sstores = self.get_ops_list({"SSTORE"})
         self.__store_opcodes = dict()
         self.reference_constraints = dict()
         self.reference_args = dict()
@@ -47,7 +32,9 @@ class IndirectAddressConstraintBuilder():
         for opcode in references:
             self.build_reference_constraints(opcode)
         self.reference_to_move(references)
+        self.__sstores = self.get_ops_list({"SSTORE"})
         self.build_storage_constraints()
+        self.__mstores = self.get_ops_list(mem_write_ops)
         self.build_memory_constraints()
 
     def build_reference_constraints(self, opcode):
@@ -81,9 +68,9 @@ class IndirectAddressConstraintBuilder():
                         mask = BitVecVal(-1, 256)
                         mask = mask.as_long() >> (8 * byte)
                         #print("    append in equals: %s + %s == %s" % (ref_op.format_dependency(0), byte, oldname))
-                        equals.append(eval("%s + %s == %s" % (ref_op.format_dependency(0), byte, oldname)))
+                        equals.append(eval("%s + %s == %s" % (ref_op.format_dependency(0), byte, oldname), z3lib.__dict__))
                         #print("    append in values: %s & %s == LShR(%s, %s)" % (ref_op.writes[0], mask, expression.writes[0], 8 * byte))
-                        values.append(eval("%s & %s == LShR(%s, %s)" % (ref_op.writes[0], mask, expression.writes[0], 8 * byte)))
+                        values.append(eval("%s & %s == LShR(%s, %s)" % (ref_op.writes[0], mask, expression.writes[0], 8 * byte), z3lib.__dict__))
 
             if len(equals) > 0:
                 ref_constraint = [ Implies(equals[j], values[j]) for j in range(len(equals))]
@@ -111,10 +98,11 @@ class IndirectAddressConstraintBuilder():
             print "create variable %s to replace %s + %s" % (varname, oldname, offset)
         else:
             varname = "%s_%s" % (opcode[:4], key)
+            print('oldexpression: '+oldexpression.format_dependency(dependency, True, True))
             self.reference_args.setdefault(opcode, dict())[varname] = oldexpression.format_dependency(dependency, True, True)
             print "create variable %s to replace %s" % (varname, oldname)
         expression.reads[dependency] = varname
-        globals()[varname] = eval("BitVec('%s', 256)" % varname)
+        self.vars[varname] = eval("BitVec('%s', 256)" % varname, z3lib.__dict__)
         return varname, oldname
 
     def reference_to_move(self, opcodes):
@@ -136,6 +124,42 @@ class IndirectAddressConstraintBuilder():
             self.__build_storage_constraints(i, constraint)
 
     def __build_storage_constraints(self, index, expression):
+        if expression.opcode in {"SHA3"}:
+            print "Evaluating %s expression %s #%s" % (expression.opcode, expression, index)
+            equals = list()
+            values = list()
+            at_least_one = list()
+            store_constraints = list()
+
+            # varname, oldname = self.__create_reference_register(expression.dependencies[0], index, 0, expression.opcode)
+            # varname, oldname = self.__create_reference_register(expression, index, 0, expression.opcode)
+            store_constraint = "SHA3(Concat(BitVecVal(%s,256),BitVecVal(%s,256))) == %s" % (expression.reads[0], expression.reads[1], expression.writes[0])
+            print "new constraint SHA3(Concat(BitVecVal(%s,256),BitVecVal(%s,256))) == %s" % (expression.reads[0], expression.reads[1], expression.writes[0])
+            store_constraints.append(store_constraint)
+            #print "    Appending %s in __ref_constraints at index %s " % (calldata_constraint, index)
+
+            for store_index, store in self.__sstores:
+                print "   looking for sstore in expression #%s %s" % (store_index, store)
+                if store_index <= index:
+                    continue
+                if store.opcode == "SSTORE":
+                    #print("    append in equals: %s == %s" % (store.format_dependency(0), oldname))
+                    equals.append(eval("%s == %s" % (store.format_dependency(0), oldname), z3lib.__dict__))
+                    #print("    append in values: %s == %s" % (store.format_dependency(1), expression.writes[0]))
+                    values.append(eval("%s == %s" % (store.format_dependency(1), expression.writes[0]), z3lib.__dict__))
+
+            if len(equals) > 0:
+                nots = [ Not(equals[j]) for j in range(len(equals))]
+                keys = [equals[0]]
+                keys.extend([And(equals[n], And(nots[:n])) for n in range(1, len(equals))])
+                store_constraint = [ Implies(keys[j], values[j]) for j in range(len(keys))]
+                store_constraints.append(store_constraint)
+                at_least_one.extend(keys)
+                store_constraint = Or(at_least_one) == True
+                store_constraints.append(store_constraint)
+
+            if len(store_constraints) > 0:
+                self.store_constraints[expression.address] = store_constraints
         if expression.opcode in {"SLOAD"}:
             print "Evaluating %s expression %s #%s" % (expression.opcode, expression, index)
             equals = list()
@@ -143,8 +167,8 @@ class IndirectAddressConstraintBuilder():
             at_least_one = list()
             store_constraints = list()
 
-            varname, oldname = self.__create_reference_register(expression.dependencies[0], index, 0, expression.opcode)
-            #varname, oldname = self.__create_reference_register(expression, index, 0, expression.opcode)
+            # varname, oldname = self.__create_reference_register(expression.dependencies[0], index, 0, expression.opcode)
+            varname, oldname = self.__create_reference_register(expression, index, 0, expression.opcode)
             store_constraint = "%s == %s" % (varname, expression.writes[0])
             print "new constraint %s == %s" % (varname, expression.writes[0])
             store_constraints.append(store_constraint)
@@ -156,9 +180,9 @@ class IndirectAddressConstraintBuilder():
                     continue
                 if store.opcode == "SSTORE":
                     #print("    append in equals: %s == %s" % (store.format_dependency(0), oldname))
-                    equals.append(eval("%s == %s" % (store.format_dependency(0), oldname)))
+                    equals.append(eval("%s == %s" % (store.format_dependency(0), oldname), z3lib.__dict__))
                     #print("    append in values: %s == %s" % (store.format_dependency(1), expression.writes[0]))
-                    values.append(eval("%s == %s" % (store.format_dependency(1), expression.writes[0])))
+                    values.append(eval("%s == %s" % (store.format_dependency(1), expression.writes[0]), z3lib.__dict__))
 
             if len(equals) > 0:
                 nots = [ Not(equals[j]) for j in range(len(equals))]
@@ -182,7 +206,7 @@ class IndirectAddressConstraintBuilder():
             self.__build_memory_constraints(i, constraint)
 
     def __build_memory_constraints(self, index, expression):
-        if expression.opcode in {"MLOAD", "SHA3"}:
+        if expression.opcode in {"MLOAD"}:
             print "Evaluating %s expression %s #%s" % (expression.opcode, expression, index)
             equals = list()
             values = list()
@@ -195,9 +219,9 @@ class IndirectAddressConstraintBuilder():
                     continue
                 if mstore[1].opcode == "MSTORE":
                     print("    append in equals: %s == %s" % (mstore[1].format_dependency(0), expression.format_dependency(0)))
-                    equals.append(eval("%s == %s" % (mstore[1].format_dependency(0), expression.format_dependency(0))))
+                    equals.append(eval("%s == %s" % (mstore[1].format_dependency(0), expression.format_dependency(0)), z3lib.__dict__))
                     print("    append in values: %s == %s" % (mstore[1].format_dependency(1), expression.writes[0]))
-                    values.append(eval("%s == %s" % (mstore[1].format_dependency(1), expression.writes[0])))
+                    values.append(eval("%s == %s" % (mstore[1].format_dependency(1), expression.writes[0]),z3lib.__dict__))
                 elif mstore[1].opcode == "CALLDATACOPY":
                     destination = mstore[1].format_dependency(0)
                     #source = mstore[1].format_dependency(1)
@@ -213,8 +237,8 @@ class IndirectAddressConstraintBuilder():
                             % (equals_calldatacopy_str, expression.writes[0], source)
                     mem_constraints.append(constraint)
                     print "Appending constraints %s for mstore %s" % (constraint, mstore[1])
-                    globals()[offset] = eval("BitVec('%s', 256)" % offset)
-                    at_least_one.append(eval(equals_calldatacopy_str))
+                    self.vars[offset] = eval("BitVec('%s', 256)" % offset, z3lib.__dict__)
+                    at_least_one.append(eval(equals_calldatacopy_str, z3lib.__dict__))
 
             if len(equals) > 0:
                 nots = [ Not(equals[j]) for j in range(len(equals))]
@@ -232,7 +256,7 @@ class IndirectAddressConstraintBuilder():
 
         for j in expression.dependencies:
             self.__build_memory_constraints(index, expression.dependencies[j])
- 
+
     def get_ops_list(self, ops):
         oplist = list()
         for i, expression in enumerate(self.__expressions):
@@ -245,31 +269,61 @@ class IndirectAddressConstraintBuilder():
         for i in expression.dependencies:
             self.__get_ops_list(expression.dependencies[i], ops, oplist, index)
 
+
 class TargetSolver(PathFinder):
     def __init__(self, binary):
+        self.vars = self.__initvars()
         PathFinder.__init__(self, binary)
         self.solver = Solver()
         print("============== Solver ===============")
         for func in self.get_all_functions():
             self.__iterate_targets(func)
 
+    def __initvars(self):
+        vars = {}
+        vars['self'] = self
+        vars['bool_opcodes'] = {
+                "LT",
+                "GT",
+                "SLT",
+                "SGT",
+                "EQ",
+                "ISZERO",
+                "NONZERO",
+                "CALL"
+        } | fake_ops.viewkeys()
+
+        vars['equivalent_opcodes'] = {
+                "ASSERT":   ("NONZERO", MonoOpExpression)
+        }
+
+        vars['msg'] = Message()
+        vars['block'] = Block()
+        vars['BALANCE'] = BitVec('BALANCE', 256)
+        vars['AD_MASK'] = BitVecVal(0xffffffffffffffffffffffffffffffffffffffff, 256)
+        vars['this'] = BitVecVal(0xca11ab1e, 256)
+        vars['target_value'] = 0xacce551b1e
+        vars['SHA3'] = Function('SHA3', BitVecSort(512), BitVecSort(256))
+
+        return vars
+
     def __iterate_targets(self, func):
         for target in self.paths_to_targets[func.signature]:
             print("target %s" % target.expression)
-            target.set_target_value_constraint(target_value)
+            target.set_target_value_constraint(self.vars['target_value'])
             constraints = target.constraints
             self.rewrite_opcodes(constraints)
             self.static_single_assignment(constraints)
             self.declare_variables(constraints)
-            self.__indirect_address_constraints = IndirectAddressConstraintBuilder(constraints)
+            self.__indirect_address_constraints = IndirectAddressConstraintBuilder(constraints, self.vars)
             self.__solve(target)
 
     def rewrite_opcodes(self, expressions):
         for i, expression in enumerate(expressions):
             opcode = expression.opcode
-            if expression.opcode in equivalent_opcodes:
-                expressions[i].__class__ = equivalent_opcodes[opcode][1]
-                expressions[i].opcode = equivalent_opcodes[opcode][0]
+            if expression.opcode in self.vars['equivalent_opcodes']:
+                expressions[i].__class__ = self.vars['equivalent_opcodes'][opcode][1]
+                expressions[i].opcode = self.vars['equivalent_opcodes'][opcode][0]
 
     def static_single_assignment(self, expressions):
         self.__current_names = dict()
@@ -290,7 +344,7 @@ class TargetSolver(PathFinder):
             if i in expression.dependencies:
                 dependency = expression.dependencies[i]
                 if expression.contains_operations({"MLOAD", "CALLDATALOAD"})\
-                        or expression.contains_operations(bool_opcodes):
+                        or expression.contains_operations(self.vars['bool_opcodes']):
                     self.__static_single_assignment(dependency, index)
                 if len(dependency.writes) > 0:
                     expression.reads[i] = dependency.writes[0]
@@ -306,7 +360,7 @@ class TargetSolver(PathFinder):
         for index, register in enumerate(reads):
             if index in expression.dependencies:
                 if not expression.contains_operations({"MLOAD", "CALLDATALOAD"})\
-                        and not expression.contains_operations(bool_opcodes):
+                        and not expression.contains_operations(self.vars['bool_opcodes']):
                     self.__rename_read_registers(expression.dependencies[index])
             else:
                 if register in self.__current_names:
@@ -315,7 +369,7 @@ class TargetSolver(PathFinder):
                 if not isinstance(register, str) and self.__has_bool_arguments(expression.reads):
                     # immediate values are converted to True or False
                     reads[index] = (register != 0)
-                
+
     def __has_bool_arguments(self, reads):
         ret = False
         for read in reads:
@@ -331,11 +385,11 @@ class TargetSolver(PathFinder):
         for key in self.__types:
             keytype = self.__types[key]
             if keytype == "Bool":
-                globals()[key] = eval("Bool('%s')" % key)
+                self.vars[key] = eval("Bool('%s')" % key, z3lib.__dict__)
             elif keytype == "BitVec":
-                globals()[key] = eval("BitVec('%s', 256)" % key)
+                self.vars[key] = eval("BitVec('%s', 256)" % key, z3lib.__dict__)
             #elif keytype == "BitVecVal":
-            #    globals()[key] = eval("BitVecVal(%s, 256)" % key)
+            #    self.vars[key] = eval("BitVecVal(%s, 256)" % key)
 
     def __declare_variables(self, expression):
         self.__declare_read_variables(expression)
@@ -343,8 +397,8 @@ class TargetSolver(PathFinder):
         for i, read in enumerate(expression.reads):
             if i in expression.dependencies:
                 dependency = expression.dependencies[i]
-                if expression.contains_operations({"MLOAD", "CALLDATALOAD"})\
-                        or expression.contains_operations(bool_opcodes):
+                if expression.contains_operations({"MLOAD", "CALLDATALOAD", "SLOAD", "SHA3"})\
+                        or expression.contains_operations(self.vars['bool_opcodes']):
                     self.__declare_variables(dependency)
 
     def __declare_read_variables(self, expression):
@@ -371,17 +425,17 @@ class TargetSolver(PathFinder):
     def __convert_read_bool(self, expression):
         for i, register in enumerate(expression.reads):
             if i not in expression.dependencies:
-                if expression.opcode not in bool_opcodes and isinstance(register, str):
+                if expression.opcode not in self.vars['bool_opcodes'] and isinstance(register, str):
                     if len(expression.writes) != 0:
                         self.__declare_same(expression.format_dependency(i), expression.writes[0], True)
             else:
                 dependency = expression.dependencies[i]
                 if expression.contains_operations({"MLOAD", "CALLDATALOAD"})\
-                        or expression.contains_operations(bool_opcodes):
+                        or expression.contains_operations(self.vars['bool_opcodes']):
                     self.__convert_read_bool(expression.dependencies[i])
 
     def is_bool_opcode(self, expression):
-        return expression.opcode in bool_opcodes and len(expression.writes) != 0
+        return expression.opcode in self.vars['bool_opcodes'] and len(expression.writes) != 0
 
     def __declare_variable(self, name, force = False):
         if name not in self.__types or force:
@@ -421,7 +475,7 @@ class TargetSolver(PathFinder):
         for i in calldata_constraints:
             for c in calldata_constraints[i]:
                 #print "calldata constraints %s" % (c)
-                eval("self.solver.add(%s)" % c)
+                eval("self.solver.add({})".format(c), z3lib.__dict__, self.vars)
 
         for constraint in reversed(target.constraints):
             self.__apply_constraints(constraint)
@@ -449,15 +503,19 @@ class TargetSolver(PathFinder):
                         ref_args = self.__indirect_address_constraints.reference_args[opcode]
                         if d.name() in ref_args:
                             value = d.name()
-                            offset = hex(eval("%s" % eval(ref_args[value])))
-                            #print "add in calldata %s: %s = %s" % (value, "C[%s]" % offset, hex(m[d].as_long()))
+                            # offset = hex(eval("%s" % eval(ref_args[value])))
+                            if "SHA3" in ref_args[d.name()]:
+                                offset = ("%s" % (ref_args[value]))
+                            else:
+                                offset = hex(eval("%s" % eval(ref_args[value]), z3lib.__dict__))
+                                print "add in calldata %s: %s = %s" % (value, "C[%s]" % offset, hex(m[d].as_long()))
                             references[opcode][offset] = value
-                        else:
+                        elif d.name() not in ["SHA3"]:
                             print "%s = %s" % (d.name(), hex(m[d].as_long()))
             for opcode in references:
                 print "%s values" % opcode
                 for offset in references[opcode]:
-                    var = eval(references[opcode][offset])
+                    var = eval(references[opcode][offset], z3lib.__dict__, self.vars)
                     print "%s[%s] = %s" % (opcode[:4], offset, hex(eval("m[var].as_long()")))
 
         self.solver.pop()
@@ -477,8 +535,8 @@ class TargetSolver(PathFinder):
             address = expression.address
             if address in indirect_constraints:
                 for indirect_constraint in indirect_constraints[address] :
-                    #print("indirect_constraints self.solver.add(%s)" % indirect_constraint)
-                    eval("self.solver.add(%s)" % indirect_constraint)
+                    print("indirect_constraints self.solver.add(%s)" % indirect_constraint)
+                    eval("self.solver.add(%s)" % indirect_constraint, z3lib.__dict__, self.vars)
             else:
                 expression_copy = deepcopy(expression)
                 if 1 in expression_copy.dependencies:
@@ -487,17 +545,17 @@ class TargetSolver(PathFinder):
                 expression_copy.dependencies = dict()
                 format_constraint = expression_copy.format_constraint()
                 print"%s self.solver.add(%s)" % (opcode, format_constraint)
-                eval("self.solver.add(%s)" % format_constraint)
+                eval("self.solver.add(%s)" % format_constraint, z3lib.__dict__, self.vars)
         else:
             address = expression.address
             if address in indirect_constraints:
                 for indirect_constraint in indirect_constraints[address]:
                     #print("indirect_constraints self.solver.add(%s)" % indirect_constraint)
-                    eval("self.solver.add(%s)" % indirect_constraint)
+                    eval("self.solver.add(%s)" % indirect_constraint, z3lib.__dict__, self.vars)
             elif expression.opcode not in mem_write_ops:
                 format_constraint = expression.format_constraint()
                 print("normal self.solver.add(%s)" % (format_constraint))
-                eval("self.solver.add(%s)" % format_constraint)
+                eval("self.solver.add(%s)" % format_constraint, z3lib.__dict__, self.vars)
 
 if __name__ == "__main__":
     input_file = open(sys.argv[1])
@@ -506,4 +564,3 @@ if __name__ == "__main__":
             line = line.split(" ")[1]
     input_file.close()
     a = TargetSolver(line)
-
