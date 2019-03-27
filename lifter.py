@@ -96,7 +96,7 @@ class Lifter(GraphBuilder):
 
 	def __reduce_functions(self):
 		for func in self.get_all_functions():
-			self.__extract_internal_calls(func)
+			#self.__extract_internal_calls(func)
 			entry_id = func.entry_id
 			entry_image = func.tracker.get_observed_image(entry_id)
 

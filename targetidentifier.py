@@ -11,7 +11,7 @@ class TargetIdentifier(Structurer):
         Structurer.__init__(self, binary)
         self.paths_to_targets = dict()
         for func in self.get_all_functions():
-            self.retrieve_targets(func, 'CALL', 1)
+            self.retrieve_targets(func, 'SSTORE', 1)
 
     def retrieve_targets(self, func, opcode, arg_index):
         graph = func.graph

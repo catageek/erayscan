@@ -39,6 +39,7 @@ class PathFinder(TargetIdentifier):
     def __iterate_blocks(self, func, graph, path_to_target, end = None):
         self.debug_tab += '  '
         print self.debug_tab + "In block %s" % (graph.get_id())
+        print self.debug_tab + "object type %s" % (graph)
         graph.debug_block(len(self.debug_tab))
         print self.debug_tab + "looking for block %s, target reached ? %s" % (path_to_target.traversed_blocks[-1], path_to_target.has_reached_target)
 

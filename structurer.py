@@ -85,14 +85,20 @@ class Structurer(Aggregator):
 			return a0
 		a1 = graph.get_natural_successor(a0)
 		a2 = graph.get_single_successor(a1)
-		if a2 not in suc_ids:
+		if a2 is not None and a2 not in suc_ids:
 			return a0
 
 		new_id = graph.allocate_id()
+                if a2 is None:
+                    suc_ids.remove(a1)
+                    a2 = suc_ids.pop()
+		    #block = IfThen(new_id, graph[a1].get_exit_address(), graph[a0], graph[a1])
+                #else:
 		block = IfThen(new_id, graph[a2].get_entry_address(), graph[a0], graph[a1])
 		graph.add_block(block)
 		graph.transfer_predecessors(a0, new_id)
 		graph.remove_blocks({a0, a1})
+                #if a2 is not None:
 		graph.add_edge(new_id, a2)
 		return new_id
 

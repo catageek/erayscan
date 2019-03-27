@@ -105,38 +105,25 @@ class Expression(object):
 		return count
 
 	# format all dependencies into a string
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		dependencies = []
 		for index in range(len(self.reads)):
-			dependencies.append(self.format_dependency(index, suppress, constraint_result, constraint_expression))
+			dependencies.append(self.format_dependency(index, suppress))
                 opcode = self.opcode
-                if constraint_expression:
-                        if opcode == "CALL":
-                                return "True"
-                        if opcode == "BALANCE" and self.contains_operations({"ADDRESS"}):
-                                return "%s == %s" % (self.writes[0], opcode)
 		return "%s(%s)" % (self.opcode, ", ".join(dependencies))
 
 	# format dependency at index into a string
-	def format_dependency(self, index, suppress=True, constraint_result=False, constraint_expression=False):
+	def format_dependency(self, index, suppress=True):
 		if index in self.dependencies:
-			return self.dependencies[index].format_dependencies(suppress, constraint_result, constraint_expression)
+			return self.dependencies[index].format_dependencies(suppress)
 		read = self.reads[index]
 		if isinstance(read, str):
-                        if constraint_result:
-                                return "m[%s].as_long()" % read
 			return read
 		if read == ADDRESS_MASK:
 			return "AD_MASK"
 		if read == WORD_MASK:
 			return "WD_MASK"
 		return "0x%x" % read
-
-	def format_constraint(self):
-		if self.writes:
-			return "%s == %s" % (self.writes[0], self.format_dependencies(False, False, True))
-		else:
-			return self.format_dependencies(True, False, True)
 
 	def __str__(self):
 		if self.writes:
@@ -146,7 +133,7 @@ class Expression(object):
 
 
 class MoveExpression(Expression):
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		return self.format_dependency(0, suppress)
 
 
@@ -164,19 +151,19 @@ class MoveExpression(Expression):
 
 
 class MonoOpExpression(Expression):
-	def format_dependencies(self, suppress=False, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress=False):
 		operator = mono_ops[self.opcode]
 		if suppress:
-			return "%s %s" % (operator, self.format_dependency(0, False, constraint_result, constraint_expression))
-		return "(%s %s)" % (operator, self.format_dependency(0, False, constraint_result, constraint_expression))
+			return "%s %s" % (operator, self.format_dependency(0, False))
+		return "(%s %s)" % (operator, self.format_dependency(0, False))
 
 
 class BinOpExpression(Expression):
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		operator = bin_ops[self.opcode]
 		if suppress:
-			return "%s %s %s" % (self.format_dependency(0, False, constraint_result), operator, self.format_dependency(1, False, constraint_result))
-		return "(%s %s %s)" % (self.format_dependency(0, False, constraint_result), operator, self.format_dependency(1, False, constraint_result))
+			return "%s %s %s" % (self.format_dependency(0, False), operator, self.format_dependency(1, False))
+		return "(%s %s %s)" % (self.format_dependency(0, False), operator, self.format_dependency(1, False))
 
 
 class JumpExpression(Expression):
@@ -224,22 +211,22 @@ class SstoreExpression(Expression):
 
 
 class SloadExpression(Expression):
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		return "S[%s]" % self.format_dependency(0, False)
 
 
 class MloadExpression(Expression):
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		return "M[%s]" % self.format_dependency(0, False)
 
 
 class CallLoadExpression(Expression):
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		return "C[%s]" % self.format_dependency(0, False)
 
 
 class SpecialExpression(Expression):
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		return special_ops[self.opcode]
 
 
@@ -254,7 +241,7 @@ class PassExpression(Expression):
 
 
 class FakeExpression(Expression):
-	def format_dependencies(self, suppress, constraint_result=False, constraint_expression=False):
+	def format_dependencies(self, suppress):
 		operator = fake_ops[self.opcode]
 		if suppress:
 			return "%s %s %s" % (self.format_dependency(0, False), operator, self.format_dependency(1, False))
